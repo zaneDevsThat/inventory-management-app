@@ -210,3 +210,15 @@ test("validateBusinessName", () => {
   assert.match(validateBusinessName("the hips perfume ", list).error, /already exists/);
   assert.deepEqual(validateBusinessName("The Hips Perfume", list, "1"), { name: "The Hips Perfume" }, "renaming to own name is fine");
 });
+
+import { validateComment } from "../public/lib.js";
+
+test("validateComment trims, blanks to null, limits length", () => {
+  assert.deepEqual(validateComment("  Sold to Ana  "), { comment: "Sold to Ana" });
+  assert.deepEqual(validateComment("   "), { comment: null });
+  assert.deepEqual(validateComment(undefined), { comment: null });
+  assert.deepEqual(validateComment("x".repeat(500)), { comment: "x".repeat(500) });
+  assert.match(validateComment("x".repeat(501)).error, /500/);
+  assert.equal(normalizeSale({ quantity: 1, unit_price_php: 1, total_php: 1, comment: "hi" }).comment, "hi");
+  assert.equal(normalizeSale({ quantity: 1, unit_price_php: 1, total_php: 1 }).comment, null);
+});

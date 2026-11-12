@@ -8,7 +8,7 @@ A small inventory and sales tracker. It's hosted on **GitHub Pages**, and the da
 - Group inventory (by date acquired) and sales (by date sold) weekly (Mon–Sun), monthly or yearly; yearly groups expand into months, all groups collapsible, with subtotals
 - In-stock status is set from quantity; out-of-stock items are dimmed
 - Live USD → PHP conversion ([open.er-api.com](https://www.exchangerate-api.com/docs/free), updated daily)
-- Record sales: stock goes down, and each sale is saved with its price, cost and exchange rate
+- Record sales with an optional comment (e.g. who it was sold to): stock goes down, and each sale is saved with its price, cost and exchange rate
 - Sales history with markup per unit (selling price − acquired amount in PHP); void a sale to return stock
 - Day/night mode, live updates across users, invite-only sign-in
 

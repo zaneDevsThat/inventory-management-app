@@ -64,6 +64,15 @@ export function validateItem({ name, quantity, acquiredAmount, sellingPrice, acq
   };
 }
 
+export const COMMENT_MAX = 500;
+
+// Optional sale comment: trimmed; blank -> null.
+export function validateComment(value) {
+  const comment = typeof value === "string" ? value.trim() : "";
+  if (comment.length > COMMENT_MAX) return { error: `Comment must be ${COMMENT_MAX} characters or fewer` };
+  return { comment: comment || null };
+}
+
 export function validateSellQuantity(value, inStock) {
   const qty = toNumber(value);
   if (!Number.isInteger(qty) || qty < 1) return { error: "Quantity sold must be a whole number of at least 1" };
@@ -99,6 +108,7 @@ export function normalizeSale(r) {
     usdToPhp: num(r.usd_to_php),
     markup: num(r.markup_php),
     soldAt: r.sold_at,
+    comment: r.comment ?? null,
   };
 }
 

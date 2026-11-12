@@ -54,6 +54,15 @@ select pg_temp.expect_error($$select public.sell_item('11111111-1111-1111-1111-1
 select pg_temp.expect_error($$select public.sell_item('11111111-1111-1111-1111-111111111111', 0, 60)$$, 'at least 1', 'zero qty rejected');
 select pg_temp.expect_error($$select public.sell_item(gen_random_uuid(), 1, 60)$$, 'Item not found', 'unknown item');
 
+-- Comments: trimmed, blank -> null, length limit, old 3-argument call still works
+select pg_temp.expect((select comment is null from s1), 'no comment by default');
+select pg_temp.expect((select comment = 'Sold to Ana' from public.sell_item('11111111-1111-1111-1111-111111111111', 0 + 1, 60, '  Sold to Ana  ') ), 'comment saved and trimmed');
+select public.void_sale((select id from public.sales where comment = 'Sold to Ana'));
+select pg_temp.expect((select comment is null from public.sell_item('11111111-1111-1111-1111-111111111111', 1, 60, '   ')), 'blank comment stored as null');
+select public.void_sale((select id from public.sales where item_id = '11111111-1111-1111-1111-111111111111' and id <> (select id from s1)));
+select pg_temp.expect_error(format('select public.sell_item(%L, 1, 60, %L)', '11111111-1111-1111-1111-111111111111', repeat('x', 501)), '500 characters', 'overlong comment rejected');
+select pg_temp.expect((select quantity = 1 from public.items where name = 'Pen'), 'stock unchanged after comment tests');
+
 -- Last unit, rate unavailable -> markup null, out of stock
 create temp table s2 as select * from public.sell_item('11111111-1111-1111-1111-111111111111', 1, null);
 select pg_temp.expect((select markup_php is null from s2), 'null markup when no rate');

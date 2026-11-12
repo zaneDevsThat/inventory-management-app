@@ -365,6 +365,14 @@
           <span class="field-label">Quantity sold</span>
           <input id="sell-qty" class="input" type="number" min="1" step="1" required />
         </label>
+        <label class="field">
+          <span class="field-label field-label-row">
+            <span>Comment <span class="optional">(optional)</span></span>
+            <span class="char-count" id="sell-comment-count">0/500</span>
+          </span>
+          <textarea id="sell-comment" class="input textarea" rows="3" maxlength="500"
+            placeholder="e.g. Sold to Ana · paid via GCash"></textarea>
+        </label>
         <div class="sell-total">
           <span class="muted">Sale total</span>
           <strong id="sell-total">₱0.00</strong>

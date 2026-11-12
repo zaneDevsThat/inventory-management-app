@@ -1,7 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/+esm";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 import {
-  validateItem, validateSellQuantity, normalizeItem, normalizeSale,
+  validateItem, validateSellQuantity, validateComment, COMMENT_MAX, normalizeItem, normalizeSale,
   salesByItem, saleMarkup, parseRatePayload, friendlyError,
   BRACKETS, groupByBracket, salesSubtotal, parseISODate, toISODate,
   groupByYearMonth, periodOptions, periodTotals, periodLabel, ALL_TIME, validateBusinessName,
@@ -275,7 +275,10 @@ function renderSales() {
   const saleRow = (s) =>
       el("tr", {}, [
         el("td", { text: dateFmt.format(new Date(s.soldAt)) }),
-        el("td", { className: "item-name", text: s.itemName }),
+        el("td", {}, [
+          el("div", { className: "item-name", text: s.itemName }),
+          ...(s.comment ? [el("div", { className: "sale-comment", text: s.comment, attrs: { title: s.comment } })] : []),
+        ]),
         el("td", { className: "num", text: int.format(s.quantity) }),
         el("td", { className: "num", text: php.format(s.unitPrice) }),
         markupCell(s),
@@ -587,12 +590,21 @@ function updateSellTotal() {
 }
 $("sell-qty").addEventListener("input", updateSellTotal);
 
+function updateCommentCount() {
+  const n = $("sell-comment").value.length;
+  $("sell-comment-count").textContent = `${n}/${COMMENT_MAX}`;
+  $("sell-comment-count").classList.toggle("near-limit", n > COMMENT_MAX - 50);
+}
+$("sell-comment").addEventListener("input", updateCommentCount);
+
 function openSell(item) {
   sellingItem = item;
   $("sell-item-name").textContent = item.name;
   $("sell-item-meta").textContent = `${int.format(item.quantity)} in stock · ${php.format(item.sellingPrice)} each`;
   $("sell-qty").value = 1;
   $("sell-qty").max = item.quantity;
+  $("sell-comment").value = "";
+  updateCommentCount();
   $("sell-error").textContent = "";
   updateSellTotal();
   $("sell-dialog").showModal();
@@ -603,12 +615,15 @@ $("sell-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const { qty, error } = validateSellQuantity($("sell-qty").value, sellingItem.quantity);
   if (error) return ($("sell-error").textContent = error);
+  const { comment, error: commentError } = validateComment($("sell-comment").value);
+  if (commentError) return ($("sell-error").textContent = commentError);
 
   withBusy(e.submitter, async () => {
     const { data: sale, error: dbError } = await supabase.rpc("sell_item", {
       p_item_id: sellingItem.id,
       p_quantity: qty,
       p_usd_to_php: state.usdToPhp, // snapshot for the markup; null if unavailable
+      p_comment: comment,
     });
     if (dbError) return ($("sell-error").textContent = friendlyError(dbError));
     $("sell-dialog").close();

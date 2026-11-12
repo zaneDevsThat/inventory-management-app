@@ -45,8 +45,22 @@ create table if not exists public.sales (
   usd_to_php          numeric(14, 6),          -- null if the rate was unavailable
   markup_php          numeric(12, 2),          -- per unit: selling price - acquired amount in PHP
   sold_at             timestamptz not null default now(),
-  sold_by             uuid references auth.users (id) on delete set null
+  sold_by             uuid references auth.users (id) on delete set null,
+  -- Free-text note, e.g. who the item was sold to.
+  comment             text check (comment is null or length(comment) <= 500)
 );
+
+-- Upgrade for databases created before sales.comment existed.
+alter table public.sales add column if not exists comment text;
+do $$
+begin
+  if not exists (select 1 from pg_constraint
+                 where conrelid = 'public.sales'::regclass and conname = 'sales_comment_check') then
+    alter table public.sales
+      add constraint sales_comment_check check (comment is null or length(comment) <= 500);
+  end if;
+end;
+$$;
 
 -- Upgrade for databases created before acquired_on existed:
 -- existing items get the date they were added as their acquisition date.
@@ -161,7 +175,11 @@ create policy "signed-in users read sales" on public.sales
 
 -- Record a sale: locks the item row, checks stock, decrements it and inserts
 -- the sale (with price, cost and rate snapshots) in one transaction.
-create or replace function public.sell_item(p_item_id uuid, p_quantity integer, p_usd_to_php numeric)
+-- Replaces the earlier 3-argument version (p_comment is optional, so old callers still work).
+drop function if exists public.sell_item(uuid, integer, numeric);
+create or replace function public.sell_item(
+  p_item_id uuid, p_quantity integer, p_usd_to_php numeric, p_comment text default null
+)
 returns public.sales
 language plpgsql
 security definer
@@ -180,6 +198,11 @@ begin
   if p_usd_to_php is not null and p_usd_to_php <= 0 then
     raise exception 'Invalid exchange rate';
   end if;
+  -- Blank comments are stored as null.
+  p_comment := nullif(btrim(p_comment), '');
+  if length(p_comment) > 500 then
+    raise exception 'Comment must be 500 characters or fewer';
+  end if;
 
   select * into v_item from public.items where id = p_item_id for update;
   if not found then
@@ -193,14 +216,15 @@ begin
 
   insert into public.sales (
     business_id, item_id, item_name, quantity, unit_price_php, total_php,
-    acquired_amount_usd, usd_to_php, markup_php, sold_by
+    acquired_amount_usd, usd_to_php, markup_php, sold_by, comment
   ) values (
     v_item.business_id, v_item.id, v_item.name, p_quantity, v_item.selling_price_php,
     round(p_quantity * v_item.selling_price_php, 2),
     v_item.acquired_amount_usd, p_usd_to_php,
     case when p_usd_to_php is null then null
          else round(v_item.selling_price_php - v_item.acquired_amount_usd * p_usd_to_php, 2) end,
-    auth.uid()
+    auth.uid(),
+    p_comment
   )
   returning * into v_sale;
 
@@ -233,9 +257,9 @@ begin
 end;
 $$;
 
-revoke all on function public.sell_item(uuid, integer, numeric) from public, anon;
+revoke all on function public.sell_item(uuid, integer, numeric, text) from public, anon;
 revoke all on function public.void_sale(uuid) from public, anon;
-grant execute on function public.sell_item(uuid, integer, numeric) to authenticated;
+grant execute on function public.sell_item(uuid, integer, numeric, text) to authenticated;
 grant execute on function public.void_sale(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------------
