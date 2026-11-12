@@ -1,0 +1,4 @@
+node_modules/
+# Old local-server data (not part of the deployed app; never commit real data)
+data/
+.env

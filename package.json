@@ -1,0 +1,11 @@
+{
+  "name": "inventory-management-app",
+  "version": "1.0.0",
+  "description": "Inventory management app: GitHub Pages frontend + Supabase backend",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/",
+    "test:db": "./test/db/run.sh"
+  },
+  "license": "MIT"
+}
