@@ -125,7 +125,8 @@ test("bracketOf: weeks start Monday", () => {
   assert.equal(bracketOf(new Date(2026, 10, 16), "week").key, "2026-11-16");
   // Week spanning a year boundary
   assert.deepEqual(bracketOf(new Date(2027, 0, 1), "week"), { key: "2026-12-28", label: "Week of Dec 28, 2026 – Jan 3, 2027" });
-  assert.deepEqual(bracketOf(new Date(2026, 10, 13), "month"), { key: "2026-11", label: "November 2026" });
+  assert.deepEqual(bracketOf(new Date(2026, 10, 13), "month"), { key: "2026-11", label: "11/2026" });
+  assert.equal(bracketOf(new Date(2026, 0, 2), "month").label, "01/2026");
   assert.deepEqual(bracketOf(new Date(2026, 10, 13), "year"), { key: "2026", label: "2026" });
 });
 
@@ -149,4 +150,63 @@ test("salesSubtotal sums units, totals and markup x qty", () => {
   ];
   assert.deepEqual(salesSubtotal(sales, null), { count: 2, units: 4, total: 2299, markupTotal: 1582.37 });
   assert.equal(salesSubtotal([{ quantity: 1, total: 5, unitPrice: 5, acquiredAmountUsd: null, usdToPhp: null, markup: null }], null).markupTotal, null);
+});
+
+import { groupByYearMonth, periodOptions, inPeriod, periodLabel, periodTotals, validateBusinessName, ALL_TIME } from "../public/lib.js";
+
+test("groupByYearMonth nests months (mm/yyyy) under years, newest first", () => {
+  const rows = [new Date(2026, 10, 3), new Date(2026, 0, 9), new Date(2026, 10, 20), new Date(2025, 11, 1)].map((d) => ({ d }));
+  const g = groupByYearMonth(rows, (r) => r.d);
+  assert.deepEqual(g.map((y) => [y.label, y.rows.length, y.months.map((m) => [m.label, m.rows.length])]), [
+    ["2026", 3, [["11/2026", 2], ["01/2026", 1]]],
+    ["2025", 1, [["12/2025", 1]]],
+  ]);
+});
+
+const pItems = [
+  { id: "a", acquiredOn: "2026-11-13", quantity: 7, inStock: true },
+  { id: "b", acquiredOn: "2026-10-04", quantity: 0, inStock: false },
+  { id: "c", acquiredOn: "2025-10-09", quantity: 4, inStock: true },
+];
+const pSales = [
+  { itemId: "a", quantity: 3, total: 2100, soldAt: new Date(2026, 10, 13, 10).toISOString() },
+  { itemId: "b", quantity: 2, total: 1798, soldAt: new Date(2026, 10, 5, 10).toISOString() },
+  { itemId: "c", quantity: 1, total: 1299, soldAt: new Date(2025, 9, 29, 10).toISOString() },
+];
+
+test("periodOptions lists years and their months with data, newest first", () => {
+  const opts = periodOptions(pItems, pSales, new Date(2027, 0, 1));
+  assert.deepEqual(opts.map((y) => [y.year, y.months.map((m) => m.label)]), [
+    ["2027", []],                       // current year always offered
+    ["2026", ["11/2026", "10/2026"]],
+    ["2025", ["10/2025"]],
+  ]);
+});
+
+test("inPeriod and periodLabel", () => {
+  assert.ok(inPeriod("2026-11-13", ALL_TIME));
+  assert.ok(inPeriod("2026-11-13", { year: "2026", month: "all" }));
+  assert.ok(!inPeriod("2025-11-13", { year: "2026", month: "all" }));
+  assert.ok(inPeriod(new Date(2026, 10, 30), { year: "2026", month: "2026-11" }));
+  assert.ok(!inPeriod(new Date(2026, 9, 31), { year: "2026", month: "2026-11" }));
+  assert.equal(periodLabel(ALL_TIME), "all time");
+  assert.equal(periodLabel({ year: "2026", month: "all" }), "2026");
+  assert.equal(periodLabel({ year: "2026", month: "2026-11" }), "11/2026");
+});
+
+test("periodTotals filters items by date acquired and sales by date sold", () => {
+  assert.deepEqual(periodTotals(pItems, pSales, { year: "2026", month: "2026-11" }), {
+    products: 1, outOfStock: 0, unitsInStock: 7, unitsSold: 5, transactions: 2, revenue: 3898,
+  });
+  assert.deepEqual(periodTotals(pItems, pSales, { year: "2026", month: "all" }).products, 2);
+  assert.equal(periodTotals(pItems, pSales, ALL_TIME).revenue, 5197);
+});
+
+test("validateBusinessName", () => {
+  const list = [{ id: "1", name: "The Hips Perfume" }, { id: "2", name: "Other" }];
+  assert.deepEqual(validateBusinessName("  New Shop ", list), { name: "New Shop" });
+  assert.match(validateBusinessName(" ", list).error, /required/);
+  assert.match(validateBusinessName("x".repeat(81), list).error, /80/);
+  assert.match(validateBusinessName("the hips perfume ", list).error, /already exists/);
+  assert.deepEqual(validateBusinessName("The Hips Perfume", list, "1"), { name: "The Hips Perfume" }, "renaming to own name is fine");
 });

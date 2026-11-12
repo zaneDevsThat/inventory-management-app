@@ -56,6 +56,11 @@
         </span>
         <span class="brand-name">Inventory Manager</span>
       </div>
+      <div class="business-switcher" id="business-switcher" hidden>
+        <span class="divider" aria-hidden="true">/</span>
+        <select id="business-select" class="input select" aria-label="Business"></select>
+        <button id="manage-businesses-btn" class="btn btn-sm" type="button">Manage businesses</button>
+      </div>
       <div class="topbar-actions">
         <span id="rate-pill" class="pill" title="USD → PHP exchange rate">Loading rate…</span>
         <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle day/night mode" title="Toggle day/night mode">
@@ -79,6 +84,29 @@
   </header>
 
   <main class="container">
+    <section id="no-business" class="card empty-business" hidden>
+      <p class="empty-title">No businesses yet</p>
+      <p class="muted">Create a business to start tracking its inventory and sales.</p>
+      <button id="create-first-business-btn" class="btn btn-primary" type="button">+ Create business</button>
+    </section>
+
+    <div id="business-content" hidden>
+    <div class="section-header">
+      <div>
+        <h2>Summary</h2>
+        <p class="muted" id="summary-caption">All time</p>
+      </div>
+      <div class="toolbar">
+        <label class="control">
+          <span class="control-label">Year</span>
+          <select id="summary-year" class="input select"></select>
+        </label>
+        <label class="control">
+          <span class="control-label">Month</span>
+          <select id="summary-month" class="input select"></select>
+        </label>
+      </div>
+    </div>
     <section class="stats" aria-label="Summary">
       <div class="stat">
         <span class="stat-label">Products</span>
@@ -88,7 +116,7 @@
       <div class="stat">
         <span class="stat-label">Units in stock</span>
         <span class="stat-value" id="stat-stock">0</span>
-        <span class="stat-sub">across all products</span>
+        <span class="stat-sub" id="stat-stock-sub">across all products</span>
       </div>
       <div class="stat">
         <span class="stat-label">Units sold</span>
@@ -98,7 +126,7 @@
       <div class="stat stat-accent">
         <span class="stat-label">Total sales</span>
         <span class="stat-value" id="stat-revenue">₱0.00</span>
-        <span class="stat-sub">in Philippine peso</span>
+        <span class="stat-sub" id="stat-revenue-sub">in Philippine peso</span>
       </div>
     </section>
 
@@ -109,9 +137,9 @@
           <p class="muted">Acquired amounts in USD, converted to PHP at the current rate.</p>
         </div>
         <div class="toolbar">
-          <label class="group-select">
-            <span>Group by</span>
-            <select id="items-group" class="input">
+          <label class="control">
+            <span class="control-label">Group by</span>
+            <select id="items-group" class="input select">
               <option value="none">None</option>
               <option value="week">Weekly</option>
               <option value="month">Monthly</option>
@@ -157,9 +185,9 @@
           <p class="muted">Voiding a sale returns its units to stock.</p>
         </div>
         <div class="toolbar">
-          <label class="group-select">
-            <span>Group by</span>
-            <select id="sales-group" class="input">
+          <label class="control">
+            <span class="control-label">Group by</span>
+            <select id="sales-group" class="input select">
               <option value="none">None</option>
               <option value="week">Weekly</option>
               <option value="month">Monthly</option>
@@ -188,6 +216,7 @@
         </div>
       </div>
     </section>
+    </div><!-- /#business-content -->
   </main>
 
   </div><!-- /#app -->
@@ -216,6 +245,68 @@
       <footer class="modal-footer">
         <button type="button" class="btn" data-close>Cancel</button>
         <button type="submit" class="btn btn-primary">Update password</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Manage businesses -->
+  <dialog id="businesses-dialog" class="modal">
+    <div>
+      <header class="modal-header">
+        <h3>Businesses</h3>
+        <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="muted">Each business has its own inventory and sales. Everyone with an account can see and manage all businesses.</p>
+        <ul id="business-list" class="business-list"></ul>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn" data-close>Close</button>
+        <button type="button" class="btn btn-primary" id="add-business-btn">+ Add business</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- Add / rename business -->
+  <dialog id="business-form-dialog" class="modal modal-sm">
+    <form id="business-form" method="dialog" novalidate>
+      <header class="modal-header">
+        <h3 id="business-form-title">Add business</h3>
+        <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <input type="hidden" id="business-id" />
+        <label class="field">
+          <span class="field-label">Business name</span>
+          <input id="business-name" class="input" type="text" maxlength="80" required autocomplete="off" />
+        </label>
+        <p id="business-error" class="form-error" role="alert"></p>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary" id="business-submit">Add business</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Delete business (type the name to confirm) -->
+  <dialog id="delete-business-dialog" class="modal modal-sm">
+    <form id="delete-business-form" method="dialog" novalidate>
+      <header class="modal-header">
+        <h3>Delete business?</h3>
+        <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="muted" id="delete-business-message"></p>
+        <label class="field">
+          <span class="field-label">Type <strong id="delete-business-name"></strong> to confirm</span>
+          <input id="delete-business-confirm" class="input" type="text" autocomplete="off" />
+        </label>
+        <p id="delete-business-error" class="form-error" role="alert"></p>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn btn-danger" id="delete-business-submit" disabled>Delete business</button>
       </footer>
     </form>
   </dialog>

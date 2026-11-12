@@ -158,6 +158,8 @@ export function friendlyError(err) {
   if (/JWT expired|not signed in/i.test(msg)) return "Your session expired. Please sign in again.";
   if (/items_name_check/.test(msg)) return "Item name is required (max 100 characters).";
   if (/items_quantity_check/.test(msg)) return "Quantity must be 0 or more.";
+  if (/businesses_name_key/.test(msg)) return "A business with that name already exists.";
+  if (/businesses_name_check/.test(msg)) return "Business name is required (max 80 characters).";
   if (/check constraint/.test(msg)) return "Amounts must be 0 or more.";
   return msg;
 }
@@ -166,7 +168,9 @@ export function friendlyError(err) {
 export const BRACKETS = ["none", "week", "month", "year"];
 
 const monthDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
-const monthYear = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
+
+// "2026-11" -> "11/2026"
+export const monthLabel = (key) => `${key.slice(5, 7)}/${key.slice(0, 4)}`;
 
 // The bracket a local date falls in. Weeks run Monday–Sunday.
 // `key` sorts chronologically as a string.
@@ -174,7 +178,8 @@ export function bracketOf(date, mode) {
   const y = date.getFullYear();
   if (mode === "year") return { key: String(y), label: String(y) };
   if (mode === "month") {
-    return { key: `${y}-${pad(date.getMonth() + 1)}`, label: monthYear.format(date) };
+    const key = `${y}-${pad(date.getMonth() + 1)}`;
+    return { key, label: monthLabel(key) };
   }
   if (mode === "week") {
     const start = new Date(y, date.getMonth(), date.getDate() - ((date.getDay() + 6) % 7));
@@ -215,4 +220,66 @@ export function salesSubtotal(sales, currentRate) {
     total: round2(total),
     markupTotal: markupKnown ? round2(markupTotal) : null,
   };
+}
+
+// Year groups, each split into month groups (mm/yyyy). Newest first at both levels.
+export function groupByYearMonth(rows, getDate) {
+  return groupByBracket(rows, getDate, "year").map((y) => ({
+    ...y,
+    months: groupByBracket(y.rows, getDate, "month"),
+  }));
+}
+
+// ---------- summary period (year -> month) ----------
+// period = { year: "all" | "2026", month: "all" | "2026-11" }
+export const ALL_TIME = { year: "all", month: "all" };
+
+// Years and months that have any items acquired or sales, newest first.
+// The current year is always offered.
+export function periodOptions(items, sales, now = new Date()) {
+  const months = new Set();
+  for (const i of items) if (i.acquiredOn) months.add(i.acquiredOn.slice(0, 7));
+  for (const s of sales) {
+    const d = new Date(s.soldAt);
+    months.add(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`);
+  }
+  const years = new Set([...months].map((m) => m.slice(0, 4)));
+  years.add(String(now.getFullYear()));
+  return [...years].sort().reverse().map((year) => ({
+    year,
+    months: [...months].filter((m) => m.startsWith(year)).sort().reverse()
+      .map((key) => ({ key, label: monthLabel(key) })),
+  }));
+}
+
+// Is a YYYY-MM-DD / local date inside the period?
+export function inPeriod(dateOrISO, period) {
+  if (period.year === "all") return true;
+  const d = typeof dateOrISO === "string" ? parseISODate(dateOrISO) : dateOrISO;
+  if (!d) return false;
+  if (String(d.getFullYear()) !== period.year) return false;
+  return period.month === "all" || `${d.getFullYear()}-${pad(d.getMonth() + 1)}` === period.month;
+}
+
+export function periodLabel(period) {
+  if (period.year === "all") return "all time";
+  return period.month === "all" ? period.year : monthLabel(period.month);
+}
+
+// Summary cards for a period: items acquired in it and sales made in it.
+export function periodTotals(items, sales, period) {
+  return totals(
+    items.filter((i) => inPeriod(i.acquiredOn, period)),
+    sales.filter((s) => inPeriod(new Date(s.soldAt), period))
+  );
+}
+
+// ---------- businesses ----------
+export function validateBusinessName(name, businesses, excludeId = null) {
+  const clean = typeof name === "string" ? name.trim() : "";
+  if (!clean) return { error: "Business name is required" };
+  if (clean.length > 80) return { error: "Business name must be 80 characters or fewer" };
+  const taken = businesses.some((b) => b.id !== excludeId && b.name.trim().toLowerCase() === clean.toLowerCase());
+  if (taken) return { error: `A business named “${clean}” already exists` };
+  return { name: clean };
 }

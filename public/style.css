@@ -16,6 +16,8 @@
   --danger-hover: #b91c1c;
   --warn: #b45309;
   --neutral-soft: #eef2f6;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  --control-h: 38px;
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
   --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.18);
   --radius: 10px;
@@ -38,6 +40,7 @@
   --danger-hover: #f87171;
   --warn: #fbbf24;
   --neutral-soft: #1e293b;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
@@ -71,14 +74,30 @@ p { margin: 0; }
 }
 .topbar-inner {
   max-width: 1280px; margin: 0 auto; padding: 12px 24px;
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  display: flex; align-items: center; gap: 16px;
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
 .brand-mark {
   display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
   background: var(--primary); color: #fff;
 }
-.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* Business switcher */
+.business-switcher { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.business-switcher .divider { color: var(--border); font-size: 22px; font-weight: 300; }
+.business-switcher .select { --control-h: 34px; height: 34px; max-width: 260px; font-weight: 600; }
+.business-switcher .btn { height: 34px; padding-top: 0; padding-bottom: 0; }
+
+.empty-business { padding: 48px 20px; text-align: center; display: grid; gap: 10px; justify-items: center; }
+
+/* Businesses dialog */
+.business-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.business-list li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.business-list li:last-child { border-bottom: none; }
+.business-list .biz-name { font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.business-list .biz-meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.business-list .current { font-size: 11px; font-weight: 600; color: var(--primary); background: var(--primary-soft); padding: 1px 8px; border-radius: 999px; margin-left: 6px; }
 .pill {
   padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
   background: var(--neutral-soft); color: var(--muted); white-space: nowrap;
@@ -108,7 +127,34 @@ p { margin: 0; }
   padding: 16px 20px; border-bottom: 1px solid var(--border);
 }
 .card-header h2 { margin-bottom: 2px; }
-.toolbar { display: flex; gap: 10px; align-items: center; }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+/* Every control in a toolbar shares one height so they line up exactly */
+.toolbar .input, .toolbar .btn { height: var(--control-h); }
+.toolbar .btn { padding-top: 0; padding-bottom: 0; }
+
+/* Label + control pair, label vertically centred on the control */
+.control { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+.control-label { font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; line-height: 1; }
+
+/* Native select restyled to match text inputs in every browser.
+   (.input.select so it beats the later .input background shorthand.) */
+.input.select {
+  appearance: none; -webkit-appearance: none;
+  width: auto; min-width: 128px; padding: 0 34px 0 11px; cursor: pointer;
+  background-image: var(--chevron); background-repeat: no-repeat; background-position: right 12px center;
+  line-height: calc(var(--control-h) - 2px);
+}
+.input.select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Section heading outside a card (Summary) */
+.section-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin-bottom: -6px; /* sits a little closer to the cards it describes */
+}
+
+/* Business view keeps the page's vertical rhythm */
+#business-content { display: grid; gap: 20px; }
+.section-header h2 { margin-bottom: 2px; }
 
 /* ---------- Controls ---------- */
 .input {
@@ -187,8 +233,18 @@ tr.out-of-stock td:not(.actions-cell) { opacity: 0.45; }
 .empty { padding: 40px 20px; text-align: center; }
 
 /* Weekly / monthly / yearly bracket headers */
-.group-select { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; }
-.group-select select { width: auto; padding-right: 28px; }
+/* Collapsible group rows */
+.group-row td { cursor: pointer; user-select: none; }
+.group-toggle {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 6px; padding: 0;
+  border: none; background: transparent; color: var(--muted); cursor: pointer; border-radius: 4px;
+  transition: transform 0.15s; vertical-align: -4px;
+}
+.group-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.group-row.collapsed .group-toggle { transform: rotate(-90deg); }
+.table tbody tr.group-row.level-1 td { background: var(--surface-2); padding-left: 36px; }
+.table tbody tr.group-row.level-1:hover td { background: var(--surface-2); }
+.group-row.level-1 .group-label { font-weight: 600; }
 .table tbody tr.group-row td {
   background: var(--primary-soft); border-bottom: 1px solid var(--border);
   padding: 8px 12px;
@@ -285,4 +341,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
   .toolbar { flex-wrap: wrap; }
   .form-grid { grid-template-columns: 1fr; }
   #rate-pill { display: none; }
+  .topbar-inner { flex-wrap: wrap; }
+  .business-switcher { order: 3; width: 100%; }
+  .business-switcher .divider { display: none; }
+  .business-switcher .select { flex: 1; max-width: none; }
+  .section-header .toolbar, .card-header .toolbar { width: 100%; }
+  .control { flex: 1; }
+  .control .select { flex: 1; }
 }

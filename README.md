@@ -2,8 +2,10 @@
 
 A small inventory and sales tracker. It's hosted on **GitHub Pages**, and the data lives in **Supabase** (Postgres + login).
 
+- Multiple businesses, each with its own inventory and sales: add, rename, delete (typed confirmation), switch from the top bar
 - Add, edit and delete items: name, date acquired, quantity, acquired amount (USD), selling price (PHP)
-- Group inventory (by date acquired) and sales (by date sold) weekly (Mon–Sun), monthly or yearly, with subtotals
+- Summary cards filterable by year, then month (mm/yyyy)
+- Group inventory (by date acquired) and sales (by date sold) weekly (Mon–Sun), monthly or yearly; yearly groups expand into months, all groups collapsible, with subtotals
 - In-stock status is set from quantity; out-of-stock items are dimmed
 - Live USD → PHP conversion ([open.er-api.com](https://www.exchangerate-api.com/docs/free), updated daily)
 - Record sales: stock goes down, and each sale is saved with its price, cost and exchange rate

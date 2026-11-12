@@ -5,8 +5,20 @@
 -- ---------------------------------------------------------------------------
 -- Tables
 -- ---------------------------------------------------------------------------
+-- Each business has its own inventory and sales.
+create table if not exists public.businesses (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null check (length(btrim(name)) between 1 and 80),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+-- Business names are unique, ignoring case and surrounding spaces.
+create unique index if not exists businesses_name_key on public.businesses (lower(btrim(name)));
+
 create table if not exists public.items (
   id                  uuid primary key default gen_random_uuid(),
+  -- Deleting a business deletes its inventory.
+  business_id         uuid not null references public.businesses (id) on delete cascade,
   name                text not null check (length(btrim(name)) between 1 and 100),
   quantity            integer not null check (quantity >= 0),
   -- Derived, so it can never disagree with quantity.
@@ -20,6 +32,8 @@ create table if not exists public.items (
 
 create table if not exists public.sales (
   id                  uuid primary key default gen_random_uuid(),
+  -- Deleting a business deletes its sales history.
+  business_id         uuid not null references public.businesses (id) on delete cascade,
   -- Kept when the item is deleted, so history and totals survive.
   item_id             uuid references public.items (id) on delete set null,
   item_name           text not null,
@@ -50,6 +64,43 @@ begin
 end;
 $$;
 
+-- Upgrade for databases created before businesses existed: existing items and
+-- sales are moved into a business called "My business" (rename it in the app).
+do $$
+declare
+  v_default uuid;
+begin
+  if not exists (select 1 from information_schema.columns
+                 where table_schema = 'public' and table_name = 'items' and column_name = 'business_id') then
+    alter table public.items
+      add column business_id uuid references public.businesses (id) on delete cascade;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                 where table_schema = 'public' and table_name = 'sales' and column_name = 'business_id') then
+    alter table public.sales
+      add column business_id uuid references public.businesses (id) on delete cascade;
+  end if;
+
+  if exists (select 1 from public.items where business_id is null)
+     or exists (select 1 from public.sales where business_id is null) then
+    select id into v_default from public.businesses order by created_at limit 1;
+    if v_default is null then
+      insert into public.businesses (name) values ('My business') returning id into v_default;
+    end if;
+    update public.items set business_id = v_default where business_id is null;
+    -- A sale belongs to its item's business; sales of deleted items go to the default.
+    update public.sales s
+       set business_id = coalesce((select i.business_id from public.items i where i.id = s.item_id), v_default)
+     where s.business_id is null;
+  end if;
+
+  alter table public.items alter column business_id set not null;
+  alter table public.sales alter column business_id set not null;
+end;
+$$;
+
+create index if not exists items_business_id_idx on public.items (business_id);
+create index if not exists sales_business_sold_at_idx on public.sales (business_id, sold_at desc);
 create index if not exists sales_item_id_idx on public.sales (item_id);
 create index if not exists items_acquired_on_idx on public.items (acquired_on desc);
 create index if not exists sales_sold_at_idx on public.sales (sold_at desc);
@@ -66,6 +117,11 @@ begin
 end;
 $$;
 
+drop trigger if exists businesses_touch_updated_at on public.businesses;
+create trigger businesses_touch_updated_at
+  before update on public.businesses
+  for each row execute function public.touch_updated_at();
+
 drop trigger if exists items_touch_updated_at on public.items;
 create trigger items_touch_updated_at
   before update on public.items
@@ -76,14 +132,20 @@ create trigger items_touch_updated_at
 -- (Public sign-ups must also be disabled in Authentication settings, so the
 -- only signed-in users are the ones you create.)
 -- ---------------------------------------------------------------------------
+alter table public.businesses enable row level security;
 alter table public.items enable row level security;
 alter table public.sales enable row level security;
 
-revoke all on public.items, public.sales from anon, authenticated;
+revoke all on public.businesses, public.items, public.sales from anon, authenticated;
+grant select, insert, update, delete on public.businesses to authenticated;
 grant select, insert, update, delete on public.items to authenticated;
 -- Sales can only be created/removed through sell_item / void_sale below,
 -- so stock and sales history can't drift apart.
 grant select on public.sales to authenticated;
+
+drop policy if exists "signed-in users manage businesses" on public.businesses;
+create policy "signed-in users manage businesses" on public.businesses
+  for all to authenticated using (true) with check (true);
 
 drop policy if exists "signed-in users manage items" on public.items;
 create policy "signed-in users manage items" on public.items
@@ -130,10 +192,10 @@ begin
   update public.items set quantity = quantity - p_quantity where id = p_item_id;
 
   insert into public.sales (
-    item_id, item_name, quantity, unit_price_php, total_php,
+    business_id, item_id, item_name, quantity, unit_price_php, total_php,
     acquired_amount_usd, usd_to_php, markup_php, sold_by
   ) values (
-    v_item.id, v_item.name, p_quantity, v_item.selling_price_php,
+    v_item.business_id, v_item.id, v_item.name, p_quantity, v_item.selling_price_php,
     round(p_quantity * v_item.selling_price_php, 2),
     v_item.acquired_amount_usd, p_usd_to_php,
     case when p_usd_to_php is null then null
@@ -182,6 +244,10 @@ grant execute on function public.void_sale(uuid) to authenticated;
 do $$
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (select 1 from pg_publication_tables
+                   where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'businesses') then
+      alter publication supabase_realtime add table public.businesses;
+    end if;
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'items') then
       alter publication supabase_realtime add table public.items;

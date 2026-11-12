@@ -2,8 +2,9 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 import {
   validateItem, validateSellQuantity, normalizeItem, normalizeSale,
-  salesByItem, totals, saleMarkup, parseRatePayload, friendlyError,
+  salesByItem, saleMarkup, parseRatePayload, friendlyError,
   BRACKETS, groupByBracket, salesSubtotal, parseISODate, toISODate,
+  groupByYearMonth, periodOptions, periodTotals, periodLabel, ALL_TIME, validateBusinessName,
 } from "./lib.js";
 
 const $ = (id) => document.getElementById(id);
@@ -21,6 +22,10 @@ const RATE_REFRESH_MS = 30 * 60 * 1000;
 const savedBracket = (key) => (BRACKETS.includes(localStorage.getItem(key)) ? localStorage.getItem(key) : "none");
 const state = {
   items: [], sales: [], usdToPhp: null, search: "", user: null,
+  businesses: [],
+  businessId: localStorage.getItem("businessId"),
+  period: ALL_TIME,          // summary cards: { year, month }
+  collapsed: new Set(),      // collapsed group rows, e.g. "sales:2026-11"
   itemsGroup: savedBracket("itemsGroup"),
   salesGroup: savedBracket("salesGroup"),
 };
@@ -82,14 +87,55 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ---------- rendering ----------
+// Year / month dropdowns for the summary. Options come from the dates that have data.
+function renderPeriodControls() {
+  const opts = periodOptions(state.items, state.sales);
+  let { year, month } = state.period;
+  if (year !== "all" && !opts.some((o) => o.year === year)) year = "all";
+  const yearOpt = opts.find((o) => o.year === year);
+  if (month !== "all" && !yearOpt?.months.some((m) => m.key === month)) month = "all";
+  state.period = { year, month };
+
+  const option = (value, text) => el("option", { text, attrs: { value } });
+  $("summary-year").replaceChildren(option("all", "All time"), ...opts.map((o) => option(o.year, o.year)));
+  $("summary-year").value = year;
+  $("summary-month").replaceChildren(
+    option("all", "All months"),
+    ...(yearOpt?.months ?? []).map((m) => option(m.key, m.label))
+  );
+  $("summary-month").value = month;
+  $("summary-month").disabled = year === "all";
+}
+
 function renderStats() {
-  const t = totals(state.items, state.sales);
+  renderPeriodControls();
+  const p = state.period;
+  const all = p.year === "all";
+  const label = periodLabel(p);
+  const t = periodTotals(state.items, state.sales, p);
+  const plural = (n, word) => `${int.format(n)} ${word}${n === 1 ? "" : "s"}`;
+
+  $("summary-caption").textContent = all ? "All time" : `For ${label}`;
   $("stat-products").textContent = int.format(t.products);
-  $("stat-products-sub").textContent = `${t.outOfStock} out of stock`;
+  $("stat-products-sub").textContent = all
+    ? `${t.outOfStock} out of stock`
+    : `acquired in ${label} · ${t.outOfStock} out of stock`;
   $("stat-stock").textContent = int.format(t.unitsInStock);
+  $("stat-stock-sub").textContent = all ? "across all products" : `of items acquired in ${label}`;
   $("stat-sold").textContent = int.format(t.unitsSold);
-  $("stat-sold-sub").textContent = `${t.transactions} transaction${t.transactions === 1 ? "" : "s"}`;
+  $("stat-sold-sub").textContent = all ? plural(t.transactions, "transaction") : `${plural(t.transactions, "transaction")} in ${label}`;
   $("stat-revenue").textContent = php.format(t.revenue);
+  $("stat-revenue-sub").textContent = all ? "in Philippine peso" : `sold in ${label}`;
+}
+
+for (const id of ["summary-year", "summary-month"]) {
+  $(id).addEventListener("change", () => {
+    const year = $("summary-year").value;
+    // Changing the year resets the month.
+    const month = id === "summary-year" ? "all" : $("summary-month").value;
+    state.period = { year, month };
+    renderStats();
+  });
 }
 
 function renderItems() {
@@ -125,29 +171,55 @@ function renderItems() {
       ]);
   };
 
-  if (state.itemsGroup === "none") {
-    $("item-rows").replaceChildren(...visible.map(itemRow));
-    return;
-  }
-  // Newest acquisitions first within each bracket.
-  const ordered = [...visible].sort(
+  const summary = (rows) => {
+    const units = rows.reduce((n, i) => n + i.quantity, 0);
+    const soldUnits = rows.reduce((n, i) => n + (sold.get(i.id)?.units ?? 0), 0);
+    const sales = rows.reduce((n, i) => n + (sold.get(i.id)?.total ?? 0), 0);
+    return summaryLine([
+      [int.format(rows.length), rows.length === 1 ? "item acquired" : "items acquired"],
+      [int.format(units), "in stock"],
+      [int.format(soldUnits), "sold"],
+      [php.format(sales), "sales"],
+    ]);
+  };
+  // Newest acquisitions first when grouped by date.
+  const ordered = state.itemsGroup === "none" ? visible : [...visible].sort(
     (a, b) => b.acquiredOn.localeCompare(a.acquiredOn) || a.name.localeCompare(b.name)
   );
-  const groups = groupByBracket(ordered, (i) => parseISODate(i.acquiredOn), state.itemsGroup);
-  $("item-rows").replaceChildren(
-    ...groups.flatMap((g) => {
-      const units = g.rows.reduce((n, i) => n + i.quantity, 0);
-      const soldUnits = g.rows.reduce((n, i) => n + (sold.get(i.id)?.units ?? 0), 0);
-      const sales = g.rows.reduce((n, i) => n + (sold.get(i.id)?.total ?? 0), 0);
-      const summary = summaryLine([
-        [int.format(g.rows.length), g.rows.length === 1 ? "item acquired" : "items acquired"],
-        [int.format(units), "in stock"],
-        [int.format(soldUnits), "sold"],
-        [php.format(sales), "sales"],
-      ]);
-      return [groupRow(g.label, summary, 10), ...g.rows.map(itemRow)];
-    })
-  );
+  renderGrouped({
+    tbody: $("item-rows"), tableKey: "items", rows: ordered, mode: state.itemsGroup,
+    getDate: (i) => parseISODate(i.acquiredOn), rowFn: itemRow, summaryFn: summary, colspan: 10,
+    rerender: renderItems,
+  });
+}
+
+// Renders rows into collapsible period groups, newest first.
+// Yearly: each year expands into its months (mm/yyyy), each month into its rows.
+function renderGrouped({ tbody, tableKey, rows, mode, getDate, rowFn, summaryFn, colspan, rerender }) {
+  if (mode === "none") {
+    tbody.replaceChildren(...rows.map(rowFn));
+    return;
+  }
+  const out = [];
+  // Adds a group header; returns true if the group is collapsed.
+  const header = (g, level) => {
+    const id = `${tableKey}:${g.key}`;
+    const collapsed = state.collapsed.has(id);
+    out.push(groupRow(g.label, summaryFn(g.rows), colspan, { level, collapsed, onToggle: () => {
+      state.collapsed.has(id) ? state.collapsed.delete(id) : state.collapsed.add(id);
+      rerender();
+    } }));
+    return collapsed;
+  };
+  if (mode === "year") {
+    for (const year of groupByYearMonth(rows, getDate)) {
+      if (header(year, 0)) continue;
+      for (const month of year.months) if (!header(month, 1)) out.push(...month.rows.map(rowFn));
+    }
+  } else {
+    for (const g of groupByBracket(rows, getDate, mode)) if (!header(g, 0)) out.push(...g.rows.map(rowFn));
+  }
+  tbody.replaceChildren(...out);
 }
 
 // "<strong>3</strong> items · <strong>₱1.00</strong> sales" built safely from parts.
@@ -161,12 +233,25 @@ function summaryLine(parts, extra = []) {
   return span;
 }
 
-function groupRow(label, summary, colspan) {
-  return el("tr", { className: "group-row" }, [
+const CHEVRON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+
+function groupRow(label, summary, colspan, { level = 0, collapsed = false, onToggle }) {
+  const toggle = el("button", {
+    className: "group-toggle",
+    attrs: { type: "button", "aria-expanded": String(!collapsed), "aria-label": `${collapsed ? "Expand" : "Collapse"} ${label}` },
+  });
+  toggle.innerHTML = CHEVRON; // constant markup
+  const row = el("tr", { className: `group-row level-${level}${collapsed ? " collapsed" : ""}` }, [
     el("td", { attrs: { colspan } }, [
-      el("div", { className: "group-head" }, [el("span", { className: "group-label", text: label }), summary]),
+      el("div", { className: "group-head" }, [
+        el("span", { className: "group-label" }, [toggle, label]),
+        summary,
+      ]),
     ]),
   ]);
+  // Whole header row toggles; the button gives keyboard access.
+  row.addEventListener("click", onToggle);
+  return row;
 }
 
 function markupCell(sale) {
@@ -200,14 +285,8 @@ function renderSales() {
         ]),
       ]);
 
-  if (state.salesGroup === "none") {
-    $("sale-rows").replaceChildren(...state.sales.map(saleRow));
-    return;
-  }
-  const groups = groupByBracket(state.sales, (s) => new Date(s.soldAt), state.salesGroup);
-  $("sale-rows").replaceChildren(
-    ...groups.flatMap((g) => {
-      const t = salesSubtotal(g.rows, state.usdToPhp);
+  const summary = (rows) => {
+      const t = salesSubtotal(rows, state.usdToPhp);
       const markup = el("span", {}, [
         el("strong", {
           text: t.markupTotal == null ? "—" : php.format(t.markupTotal),
@@ -216,7 +295,7 @@ function renderSales() {
         " markup",
       ]);
       markup.title = "Sum of markup per unit × quantity";
-      const summary = summaryLine(
+      return summaryLine(
         [
           [int.format(t.count), t.count === 1 ? "sale" : "sales"],
           [int.format(t.units), t.units === 1 ? "unit" : "units"],
@@ -224,9 +303,12 @@ function renderSales() {
         ],
         [markup]
       );
-      return [groupRow(g.label, summary, 7), ...g.rows.map(saleRow)];
-    })
-  );
+  };
+  renderGrouped({
+    tbody: $("sale-rows"), tableKey: "sales", rows: state.sales, mode: state.salesGroup,
+    getDate: (s) => new Date(s.soldAt), rowFn: saleRow, summaryFn: summary, colspan: 7,
+    rerender: renderSales,
+  });
 }
 
 function render() {
@@ -237,10 +319,17 @@ function render() {
 
 // ---------- data ----------
 async function loadData() {
+  const businessId = state.businessId;
+  if (!businessId) {
+    state.items = [];
+    state.sales = [];
+    return;
+  }
   const [itemsRes, salesRes] = await Promise.all([
-    supabase.from("items").select("*").order("name"),
-    supabase.from("sales").select("*").order("sold_at", { ascending: false }),
+    supabase.from("items").select("*").eq("business_id", businessId).order("name"),
+    supabase.from("sales").select("*").eq("business_id", businessId).order("sold_at", { ascending: false }),
   ]);
+  if (state.businessId !== businessId) return; // switched business while loading
   const error = itemsRes.error || salesRes.error;
   if (error) {
     toast(`Could not load data: ${friendlyError(error)}`, true);
@@ -251,13 +340,44 @@ async function loadData() {
   render();
 }
 
-// Live updates: reload when anyone changes items or sales (debounced).
+// Businesses (with item/sale counts for the manage dialog).
+async function loadBusinesses() {
+  const { data, error } = await supabase
+    .from("businesses")
+    .select("id, name, items(count), sales(count)")
+    .order("name");
+  if (error) {
+    toast(`Could not load businesses: ${friendlyError(error)}`, true);
+    return;
+  }
+  state.businesses = data.map((b) => ({
+    id: b.id,
+    name: b.name,
+    itemCount: b.items?.[0]?.count ?? 0,
+    saleCount: b.sales?.[0]?.count ?? 0,
+  }));
+  if (!state.businesses.some((b) => b.id === state.businessId)) {
+    state.businessId = state.businesses[0]?.id ?? null;
+  }
+  if (state.businessId) localStorage.setItem("businessId", state.businessId);
+  else localStorage.removeItem("businessId");
+  renderBusinesses();
+}
+
+// Reload everything the current view shows.
+async function refresh() {
+  await loadBusinesses();
+  await loadData();
+}
+
+// Live updates: reload when anyone changes businesses, items or sales (debounced).
 let realtimeChannel = null;
 let reloadTimer;
 function subscribeRealtime() {
-  const reload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(loadData, 300); };
+  const reload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(refresh, 300); };
   realtimeChannel = supabase
     .channel("inventory")
+    .on("postgres_changes", { event: "*", schema: "public", table: "businesses" }, reload)
     .on("postgres_changes", { event: "*", schema: "public", table: "items" }, reload)
     .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, reload)
     .subscribe();
@@ -311,7 +431,7 @@ async function onSignedIn(user) {
   $("user-email").textContent = user.email;
   $("password-username").value = user.email;
   showScreen("app");
-  await Promise.all([loadData(), loadRate()]);
+  await Promise.all([refresh(), loadRate()]);
   subscribeRealtime();
   rateTimer = setInterval(loadRate, RATE_REFRESH_MS);
 }
@@ -320,6 +440,9 @@ function onSignedOut() {
   state.user = null;
   state.items = [];
   state.sales = [];
+  state.businesses = [];
+  state.period = ALL_TIME;
+  state.collapsed.clear();
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   realtimeChannel = null;
   clearInterval(rateTimer);
@@ -435,11 +558,11 @@ $("item-form").addEventListener("submit", (e) => {
   withBusy($("item-submit"), async () => {
     const { error: dbError } = id
       ? await supabase.from("items").update(row).eq("id", id)
-      : await supabase.from("items").insert(row);
+      : await supabase.from("items").insert({ ...row, business_id: state.businessId });
     if (dbError) return ($("item-error").textContent = friendlyError(dbError));
     $("item-dialog").close();
     toast(id ? "Item updated" : "Item added");
-    await loadData();
+    await refresh();
   });
 });
 
@@ -452,7 +575,7 @@ async function deleteItem(item) {
   const { error } = await supabase.from("items").delete().eq("id", item.id);
   if (error) return toast(friendlyError(error), true);
   toast("Item deleted");
-  await loadData();
+  await refresh();
 }
 
 // Sell
@@ -490,7 +613,7 @@ $("sell-form").addEventListener("submit", (e) => {
     if (dbError) return ($("sell-error").textContent = friendlyError(dbError));
     $("sell-dialog").close();
     toast(`Sold ${sale.quantity} × ${sale.item_name} for ${php.format(Number(sale.total_php))}`);
-    await loadData();
+    await refresh();
   });
 });
 
@@ -504,8 +627,129 @@ async function voidSale(sale) {
   const { error } = await supabase.rpc("void_sale", { p_sale_id: sale.id });
   if (error) return toast(friendlyError(error), true);
   toast("Sale voided");
+  await refresh();
+}
+
+// ---------- businesses ----------
+const currentBusiness = () => state.businesses.find((b) => b.id === state.businessId);
+
+function renderBusinesses() {
+  const has = state.businesses.length > 0;
+  $("business-switcher").hidden = !has;
+  $("no-business").hidden = has;
+  $("business-content").hidden = !has;
+  document.title = has ? `${currentBusiness().name} · Inventory Manager` : "Inventory Manager";
+
+  $("business-select").replaceChildren(
+    ...state.businesses.map((b) => el("option", { text: b.name, attrs: { value: b.id } }))
+  );
+  if (has) $("business-select").value = state.businessId;
+
+  const plural = (n, word) => `${int.format(n)} ${word}${n === 1 ? "" : "s"}`;
+  $("business-list").replaceChildren(
+    ...state.businesses.map((b) =>
+      el("li", {}, [
+        el("span", { className: "biz-name", text: b.name },
+          b.id === state.businessId ? [el("span", { className: "current", text: "Current" })] : []),
+        el("span", { className: "biz-meta", text: `${plural(b.itemCount, "item")} · ${plural(b.saleCount, "sale")}` }),
+        btn("Rename", "btn-ghost", () => openBusinessForm(b)),
+        btn("Delete", "btn-ghost danger", () => openDeleteBusiness(b)),
+      ])
+    )
+  );
+}
+
+async function switchBusiness(id) {
+  state.businessId = id;
+  localStorage.setItem("businessId", id);
+  // Each business starts with a fresh view.
+  state.period = ALL_TIME;
+  state.collapsed.clear();
+  state.search = "";
+  $("search").value = "";
+  state.items = [];
+  state.sales = [];
+  renderBusinesses();
+  render();
   await loadData();
 }
+
+$("business-select").addEventListener("change", (e) => switchBusiness(e.target.value));
+$("manage-businesses-btn").addEventListener("click", () => $("businesses-dialog").showModal());
+$("add-business-btn").addEventListener("click", () => openBusinessForm(null));
+$("create-first-business-btn").addEventListener("click", () => openBusinessForm(null));
+
+function openBusinessForm(business) {
+  $("business-form").reset();
+  $("business-id").value = business?.id ?? "";
+  $("business-name").value = business?.name ?? "";
+  $("business-form-title").textContent = business ? "Rename business" : "Add business";
+  $("business-submit").textContent = business ? "Save" : "Add business";
+  $("business-error").textContent = "";
+  $("business-form-dialog").showModal();
+  $("business-name").focus();
+}
+
+$("business-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const id = $("business-id").value || null;
+  const { name, error } = validateBusinessName($("business-name").value, state.businesses, id);
+  if (error) return ($("business-error").textContent = error);
+
+  withBusy($("business-submit"), async () => {
+    if (id) {
+      const { error: dbError } = await supabase.from("businesses").update({ name }).eq("id", id);
+      if (dbError) return ($("business-error").textContent = friendlyError(dbError));
+      $("business-form-dialog").close();
+      toast("Business renamed");
+      await loadBusinesses();
+    } else {
+      const { data, error: dbError } = await supabase.from("businesses").insert({ name }).select("id").single();
+      if (dbError) return ($("business-error").textContent = friendlyError(dbError));
+      $("business-form-dialog").close();
+      $("businesses-dialog").close();
+      toast(`Created “${name}”`);
+      await loadBusinesses();
+      await switchBusiness(data.id); // jump straight into the new business
+    }
+  });
+});
+
+let deletingBusiness = null;
+function openDeleteBusiness(business) {
+  deletingBusiness = business;
+  const plural = (n, word) => `${int.format(n)} ${word}${n === 1 ? "" : "s"}`;
+  $("delete-business-message").textContent =
+    `This permanently deletes “${business.name}” with its ${plural(business.itemCount, "item")} ` +
+    `and ${plural(business.saleCount, "sale")}. This can't be undone.`;
+  $("delete-business-name").textContent = business.name;
+  $("delete-business-confirm").value = "";
+  $("delete-business-submit").disabled = true;
+  $("delete-business-error").textContent = "";
+  $("delete-business-dialog").showModal();
+  $("delete-business-confirm").focus();
+}
+
+$("delete-business-confirm").addEventListener("input", (e) => {
+  $("delete-business-submit").disabled = e.target.value.trim() !== deletingBusiness.name.trim();
+});
+
+$("delete-business-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if ($("delete-business-confirm").value.trim() !== deletingBusiness.name.trim()) return;
+  withBusy($("delete-business-submit"), async () => {
+    const { error } = await supabase.from("businesses").delete().eq("id", deletingBusiness.id);
+    if (error) return ($("delete-business-error").textContent = friendlyError(error));
+    $("delete-business-dialog").close();
+    toast(`Deleted “${deletingBusiness.name}”`);
+    const wasCurrent = deletingBusiness.id === state.businessId;
+    await loadBusinesses();
+    if (wasCurrent) {
+      if (state.businessId) await switchBusiness(state.businessId);
+      else $("businesses-dialog").close();
+    }
+  });
+});
 
 // ---------- weekly / monthly / yearly grouping ----------
 for (const [selectId, key, render] of [
