@@ -17,13 +17,17 @@ test("isMoney allows at most 2 decimals", () => {
 });
 
 test("validateItem builds a DB row from form strings", () => {
-  const { row, error } = validateItem({ name: "  Pen ", quantity: "3", acquiredAmount: "2.50", sellingPrice: "200" });
+  const { row, error } = validateItem(
+    { name: "  Pen ", quantity: "3", acquiredAmount: "2.50", sellingPrice: "200", acquiredOn: "2026-11-01" },
+    new Date(2026, 10, 13)
+  );
   assert.equal(error, undefined);
-  assert.deepEqual(row, { name: "Pen", quantity: 3, acquired_amount_usd: 2.5, selling_price_php: 200 });
+  assert.deepEqual(row, { name: "Pen", quantity: 3, acquired_amount_usd: 2.5, selling_price_php: 200, acquired_on: "2026-11-01" });
 });
 
 test("validateItem rejects bad input", () => {
-  const ok = { name: "X", quantity: "1", acquiredAmount: "1", sellingPrice: "1" };
+  const ok = { name: "X", quantity: "1", acquiredAmount: "1", sellingPrice: "1", acquiredOn: "2026-01-01" };
+  assert.ok(validateItem(ok).row, "baseline is valid");
   const bad = [
     [{ name: " " }, /name/i],
     [{ name: "x".repeat(101) }, /100/],
@@ -92,4 +96,57 @@ test("friendlyError", () => {
   assert.match(friendlyError({ message: "Invalid login credentials" }), /Incorrect email or password/);
   assert.match(friendlyError(new TypeError("Failed to fetch")), /internet/);
   assert.equal(friendlyError({ message: "Only 2 in stock" }), "Only 2 in stock");
+});
+
+import { toISODate, parseISODate, bracketOf, groupByBracket, salesSubtotal } from "../public/lib.js";
+
+test("parseISODate is local and strict", () => {
+  const d = parseISODate("2026-11-13");
+  assert.deepEqual([d.getFullYear(), d.getMonth(), d.getDate()], [2026, 10, 13]);
+  for (const bad of ["2026-02-30", "2026-13-01", "13/11/2026", "", null]) assert.equal(parseISODate(bad), null, String(bad));
+  assert.equal(toISODate(new Date(2026, 0, 5)), "2026-01-05");
+});
+
+test("validateItem checks date acquired", () => {
+  const base = { name: "X", quantity: "1", acquiredAmount: "1", sellingPrice: "1" };
+  const today = new Date(2026, 10, 13);
+  assert.equal(validateItem({ ...base, acquiredOn: "2026-11-13" }, today).row.acquired_on, "2026-11-13");
+  assert.match(validateItem({ ...base, acquiredOn: "" }, today).error, /required/);
+  assert.match(validateItem({ ...base, acquiredOn: "2026-11-14" }, today).error, /future/);
+  assert.match(validateItem({ ...base, acquiredOn: "1999-12-31" }, today).error, /2000/);
+  assert.match(validateItem({ ...base, acquiredOn: "2026-02-30" }, today).error, /valid/);
+});
+
+test("bracketOf: weeks start Monday", () => {
+  // Fri 13 Nov 2026 -> week Mon 9 – Sun 15
+  assert.deepEqual(bracketOf(new Date(2026, 10, 13), "week"), { key: "2026-11-09", label: "Week of Nov 9 – Nov 15, 2026" });
+  // Sunday belongs to the week that started the previous Monday
+  assert.equal(bracketOf(new Date(2026, 10, 15), "week").key, "2026-11-09");
+  assert.equal(bracketOf(new Date(2026, 10, 16), "week").key, "2026-11-16");
+  // Week spanning a year boundary
+  assert.deepEqual(bracketOf(new Date(2027, 0, 1), "week"), { key: "2026-12-28", label: "Week of Dec 28, 2026 – Jan 3, 2027" });
+  assert.deepEqual(bracketOf(new Date(2026, 10, 13), "month"), { key: "2026-11", label: "November 2026" });
+  assert.deepEqual(bracketOf(new Date(2026, 10, 13), "year"), { key: "2026", label: "2026" });
+});
+
+test("groupByBracket sorts brackets newest first, keeps row order", () => {
+  const rows = [
+    { n: "a", d: new Date(2026, 0, 5) },
+    { n: "b", d: new Date(2026, 10, 2) },
+    { n: "c", d: new Date(2026, 0, 20) },
+    { n: "d", d: new Date(2025, 11, 31) },
+  ];
+  const g = groupByBracket(rows, (r) => r.d, "month");
+  assert.deepEqual(g.map((x) => x.key), ["2026-11", "2026-01", "2025-12"]);
+  assert.deepEqual(g[1].rows.map((r) => r.n), ["a", "c"]);
+  assert.deepEqual(groupByBracket(rows, (r) => r.d, "year").map((x) => [x.key, x.rows.length]), [["2026", 3], ["2025", 1]]);
+});
+
+test("salesSubtotal sums units, totals and markup x qty", () => {
+  const sales = [
+    { quantity: 3, total: 2100, unitPrice: 700, acquiredAmountUsd: 2.44, usdToPhp: 63.30539, markup: 545.53 },
+    { quantity: 1, total: 199, unitPrice: 199, acquiredAmountUsd: 4, usdToPhp: 63.30539, markup: -54.22 },
+  ];
+  assert.deepEqual(salesSubtotal(sales, null), { count: 2, units: 4, total: 2299, markupTotal: 1582.37 });
+  assert.equal(salesSubtotal([{ quantity: 1, total: 5, unitPrice: 5, acquiredAmountUsd: null, usdToPhp: null, markup: null }], null).markupTotal, null);
 });

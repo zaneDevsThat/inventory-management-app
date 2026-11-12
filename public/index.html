@@ -109,6 +109,15 @@
           <p class="muted">Acquired amounts in USD, converted to PHP at the current rate.</p>
         </div>
         <div class="toolbar">
+          <label class="group-select">
+            <span>Group by</span>
+            <select id="items-group" class="input">
+              <option value="none">None</option>
+              <option value="week">Weekly</option>
+              <option value="month">Monthly</option>
+              <option value="year">Yearly</option>
+            </select>
+          </label>
           <input id="search" class="input search" type="search" placeholder="Search items…" aria-label="Search items" />
           <button id="add-btn" class="btn btn-primary" type="button">+ Add item</button>
         </div>
@@ -118,6 +127,7 @@
           <thead>
             <tr>
               <th>Item</th>
+              <th>Date acquired</th>
               <th>Status</th>
               <th class="num">Qty</th>
               <th class="num">Acquired (USD)</th>
@@ -145,6 +155,17 @@
         <div>
           <h2>Sales history</h2>
           <p class="muted">Voiding a sale returns its units to stock.</p>
+        </div>
+        <div class="toolbar">
+          <label class="group-select">
+            <span>Group by</span>
+            <select id="sales-group" class="input">
+              <option value="none">None</option>
+              <option value="week">Weekly</option>
+              <option value="month">Monthly</option>
+              <option value="year">Yearly</option>
+            </select>
+          </label>
         </div>
       </div>
       <div class="table-wrap">
@@ -218,11 +239,15 @@
           <span class="field-hint">0 marks the item out of stock</span>
         </label>
         <label class="field">
+          <span class="field-label">Date acquired</span>
+          <input id="acquiredOn" class="input" type="date" min="2000-01-01" required />
+        </label>
+        <label class="field">
           <span class="field-label">Acquired amount (USD)</span>
           <div class="input-affix"><span>$</span><input id="acquiredAmount" class="input" type="number" min="0" step="0.01" required placeholder="0.00" /></div>
           <span class="field-hint" id="acquired-php-preview">≈ ₱—</span>
         </label>
-        <label class="field span-2">
+        <label class="field">
           <span class="field-label">Selling price (PHP)</span>
           <div class="input-affix"><span>₱</span><input id="sellingPrice" class="input" type="number" min="0" step="0.01" required placeholder="0.00" /></div>
         </label>

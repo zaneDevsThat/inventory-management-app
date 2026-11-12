@@ -13,6 +13,7 @@ create table if not exists public.items (
   in_stock            boolean generated always as (quantity > 0) stored,
   acquired_amount_usd numeric(12, 2) not null check (acquired_amount_usd >= 0),
   selling_price_php   numeric(12, 2) not null check (selling_price_php >= 0),
+  acquired_on         date not null default current_date check (acquired_on >= date '2000-01-01'),
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now()
 );
@@ -33,7 +34,24 @@ create table if not exists public.sales (
   sold_by             uuid references auth.users (id) on delete set null
 );
 
+-- Upgrade for databases created before acquired_on existed:
+-- existing items get the date they were added as their acquisition date.
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                 where table_schema = 'public' and table_name = 'items' and column_name = 'acquired_on') then
+    alter table public.items add column acquired_on date;
+    update public.items set acquired_on = (created_at at time zone 'Asia/Manila')::date;
+    alter table public.items
+      alter column acquired_on set default current_date,
+      alter column acquired_on set not null,
+      add constraint items_acquired_on_check check (acquired_on >= date '2000-01-01');
+  end if;
+end;
+$$;
+
 create index if not exists sales_item_id_idx on public.sales (item_id);
+create index if not exists items_acquired_on_idx on public.items (acquired_on desc);
 create index if not exists sales_sold_at_idx on public.sales (sold_at desc);
 
 -- Keep items.updated_at current.

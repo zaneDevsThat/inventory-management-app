@@ -27,6 +27,8 @@ set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000001';
 insert into public.items (id, name, quantity, acquired_amount_usd, selling_price_php)
 values ('11111111-1111-1111-1111-111111111111', 'Pen', 3, 2.50, 200);
 select pg_temp.expect((select in_stock from public.items where name = 'Pen'), 'item in stock when qty > 0');
+select pg_temp.expect((select acquired_on = current_date from public.items where name = 'Pen'), 'acquired_on defaults to today');
+select pg_temp.expect_error($$insert into public.items (name, quantity, acquired_amount_usd, selling_price_php, acquired_on) values ('X', 1, 1, 1, '1999-12-31')$$, 'acquired_on_check', 'implausible acquired_on rejected');
 
 select pg_temp.expect_error($$insert into public.items (name, quantity, acquired_amount_usd, selling_price_php) values ('X', -1, 1, 1)$$, 'check', 'negative qty rejected');
 select pg_temp.expect_error($$insert into public.items (name, quantity, acquired_amount_usd, selling_price_php) values ('   ', 1, 1, 1)$$, 'check', 'blank name rejected');

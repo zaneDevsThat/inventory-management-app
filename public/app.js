@@ -3,6 +3,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 import {
   validateItem, validateSellQuantity, normalizeItem, normalizeSale,
   salesByItem, totals, saleMarkup, parseRatePayload, friendlyError,
+  BRACKETS, groupByBracket, salesSubtotal, parseISODate, toISODate,
 } from "./lib.js";
 
 const $ = (id) => document.getElementById(id);
@@ -10,13 +11,19 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 const php = new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" });
 const int = new Intl.NumberFormat("en-US");
 const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const dayFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
 const RATE_URL = "https://open.er-api.com/v6/latest/USD";
 const RATE_CACHE_KEY = "usdToPhpRate";
 const RATE_TTL_MS = 60 * 60 * 1000;       // provider updates daily; don't hammer it
 const RATE_REFRESH_MS = 30 * 60 * 1000;
 
-const state = { items: [], sales: [], usdToPhp: null, search: "", user: null };
+const savedBracket = (key) => (BRACKETS.includes(localStorage.getItem(key)) ? localStorage.getItem(key) : "none");
+const state = {
+  items: [], sales: [], usdToPhp: null, search: "", user: null,
+  itemsGroup: savedBracket("itemsGroup"),
+  salesGroup: savedBracket("salesGroup"),
+};
 
 // ---------- theme (works on every screen) ----------
 $("theme-toggle").addEventListener("click", () => {
@@ -93,8 +100,7 @@ function renderItems() {
   $("items-empty").hidden = state.items.length > 0;
   $("items-nomatch").hidden = !(state.items.length > 0 && visible.length === 0);
 
-  $("item-rows").replaceChildren(
-    ...visible.map((item) => {
+  const itemRow = (item) => {
       const s = sold.get(item.id) || { units: 0, total: 0 };
       const badge = el("span", {
         className: `badge ${item.inStock ? "in" : "out"}`,
@@ -107,6 +113,7 @@ function renderItems() {
       ]);
       return el("tr", { className: item.inStock ? "" : "out-of-stock" }, [
         el("td", { className: "item-name", text: item.name }),
+        el("td", { className: "nowrap", text: item.acquiredOn ? dayFmt.format(parseISODate(item.acquiredOn)) : "—" }),
         el("td", {}, [badge]),
         el("td", { className: "num", text: int.format(item.quantity) }),
         el("td", { className: "num", text: usd.format(item.acquiredAmount) }),
@@ -116,8 +123,50 @@ function renderItems() {
         el("td", { className: "num", text: php.format(s.total) }),
         el("td", { className: "actions-cell" }, [actions]),
       ]);
+  };
+
+  if (state.itemsGroup === "none") {
+    $("item-rows").replaceChildren(...visible.map(itemRow));
+    return;
+  }
+  // Newest acquisitions first within each bracket.
+  const ordered = [...visible].sort(
+    (a, b) => b.acquiredOn.localeCompare(a.acquiredOn) || a.name.localeCompare(b.name)
+  );
+  const groups = groupByBracket(ordered, (i) => parseISODate(i.acquiredOn), state.itemsGroup);
+  $("item-rows").replaceChildren(
+    ...groups.flatMap((g) => {
+      const units = g.rows.reduce((n, i) => n + i.quantity, 0);
+      const soldUnits = g.rows.reduce((n, i) => n + (sold.get(i.id)?.units ?? 0), 0);
+      const sales = g.rows.reduce((n, i) => n + (sold.get(i.id)?.total ?? 0), 0);
+      const summary = summaryLine([
+        [int.format(g.rows.length), g.rows.length === 1 ? "item acquired" : "items acquired"],
+        [int.format(units), "in stock"],
+        [int.format(soldUnits), "sold"],
+        [php.format(sales), "sales"],
+      ]);
+      return [groupRow(g.label, summary, 10), ...g.rows.map(itemRow)];
     })
   );
+}
+
+// "<strong>3</strong> items · <strong>₱1.00</strong> sales" built safely from parts.
+function summaryLine(parts, extra = []) {
+  const span = el("span", { className: "group-summary" });
+  parts.forEach(([value, label], i) => {
+    if (i) span.append(" · ");
+    span.append(el("strong", { text: value }), ` ${label}`);
+  });
+  for (const node of extra) span.append(" · ", node);
+  return span;
+}
+
+function groupRow(label, summary, colspan) {
+  return el("tr", { className: "group-row" }, [
+    el("td", { attrs: { colspan } }, [
+      el("div", { className: "group-head" }, [el("span", { className: "group-label", text: label }), summary]),
+    ]),
+  ]);
 }
 
 function markupCell(sale) {
@@ -138,8 +187,7 @@ function markupCell(sale) {
 
 function renderSales() {
   $("sales-empty").hidden = state.sales.length > 0;
-  $("sale-rows").replaceChildren(
-    ...state.sales.map((s) =>
+  const saleRow = (s) =>
       el("tr", {}, [
         el("td", { text: dateFmt.format(new Date(s.soldAt)) }),
         el("td", { className: "item-name", text: s.itemName }),
@@ -150,8 +198,34 @@ function renderSales() {
         el("td", { className: "actions-cell" }, [
           el("div", { className: "row-actions" }, [btn("Void", "btn-ghost danger", () => voidSale(s))]),
         ]),
-      ])
-    )
+      ]);
+
+  if (state.salesGroup === "none") {
+    $("sale-rows").replaceChildren(...state.sales.map(saleRow));
+    return;
+  }
+  const groups = groupByBracket(state.sales, (s) => new Date(s.soldAt), state.salesGroup);
+  $("sale-rows").replaceChildren(
+    ...groups.flatMap((g) => {
+      const t = salesSubtotal(g.rows, state.usdToPhp);
+      const markup = el("span", {}, [
+        el("strong", {
+          text: t.markupTotal == null ? "—" : php.format(t.markupTotal),
+          className: t.markupTotal == null ? "" : t.markupTotal < 0 ? "markup-neg" : "markup-pos",
+        }),
+        " markup",
+      ]);
+      markup.title = "Sum of markup per unit × quantity";
+      const summary = summaryLine(
+        [
+          [int.format(t.count), t.count === 1 ? "sale" : "sales"],
+          [int.format(t.units), t.units === 1 ? "unit" : "units"],
+          [php.format(t.total), "total"],
+        ],
+        [markup]
+      );
+      return [groupRow(g.label, summary, 7), ...g.rows.map(saleRow)];
+    })
   );
 }
 
@@ -334,6 +408,9 @@ function openItemDialog(item) {
     $("acquiredAmount").value = item.acquiredAmount;
     $("sellingPrice").value = item.sellingPrice;
   }
+  const today = toISODate(new Date());
+  $("acquiredOn").max = today;
+  $("acquiredOn").value = item?.acquiredOn ?? today;
   $("item-dialog-title").textContent = item ? "Edit item" : "Add item";
   $("item-submit").textContent = item ? "Save changes" : "Add item";
   $("item-error").textContent = "";
@@ -351,6 +428,7 @@ $("item-form").addEventListener("submit", (e) => {
     quantity: $("quantity").value,
     acquiredAmount: $("acquiredAmount").value,
     sellingPrice: $("sellingPrice").value,
+    acquiredOn: $("acquiredOn").value,
   });
   if (error) return ($("item-error").textContent = error);
 
@@ -427,6 +505,19 @@ async function voidSale(sale) {
   if (error) return toast(friendlyError(error), true);
   toast("Sale voided");
   await loadData();
+}
+
+// ---------- weekly / monthly / yearly grouping ----------
+for (const [selectId, key, render] of [
+  ["items-group", "itemsGroup", () => renderItems()],
+  ["sales-group", "salesGroup", () => renderSales()],
+]) {
+  $(selectId).value = state[key];
+  $(selectId).addEventListener("change", (e) => {
+    state[key] = e.target.value;
+    localStorage.setItem(key, state[key]);
+    render();
+  });
 }
 
 // ---------- search ----------

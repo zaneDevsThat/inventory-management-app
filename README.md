@@ -2,7 +2,8 @@
 
 A small inventory and sales tracker. It's hosted on **GitHub Pages**, and the data lives in **Supabase** (Postgres + login).
 
-- Add, edit and delete items: name, quantity, acquired amount (USD), selling price (PHP)
+- Add, edit and delete items: name, date acquired, quantity, acquired amount (USD), selling price (PHP)
+- Group inventory (by date acquired) and sales (by date sold) weekly (Mon–Sun), monthly or yearly, with subtotals
 - In-stock status is set from quantity; out-of-stock items are dimmed
 - Live USD → PHP conversion ([open.er-api.com](https://www.exchangerate-api.com/docs/free), updated daily)
 - Record sales: stock goes down, and each sale is saved with its price, cost and exchange rate
@@ -27,6 +28,10 @@ The Supabase URL and publishable/anon key in `public/config.js` are **meant to b
 5. **Project Settings → API Keys** (and **Data API** for the URL): copy the **Project URL** and the **publishable** key (or legacy **anon** key) into `public/config.js`, then commit and push.
 
 To remove someone's access, delete their user under **Authentication → Users**.
+
+### Updating the database
+
+`supabase/schema.sql` is safe to re-run and upgrades an existing database in place. After pulling a change to it, paste the whole file into the SQL Editor and run it **before** the new frontend deploys.
 
 ## Local development
 

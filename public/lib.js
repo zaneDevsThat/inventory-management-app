@@ -14,8 +14,25 @@ export function isMoney(n) {
 
 export const round2 = (n) => Math.round(n * 100) / 100;
 
+// ---------- dates ----------
+const pad = (n) => String(n).padStart(2, "0");
+
+// Local calendar date as YYYY-MM-DD.
+export function toISODate(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Parses YYYY-MM-DD as a local calendar date (new Date("2026-11-13") would be UTC midnight).
+export function parseISODate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? "");
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return toISODate(d) === s ? d : null; // rejects 2026-02-30 etc.
+}
+
 // Validates form input; returns { row } ready to write to the items table, or { error }.
-export function validateItem({ name, quantity, acquiredAmount, sellingPrice }) {
+// `today` is injectable for tests.
+export function validateItem({ name, quantity, acquiredAmount, sellingPrice, acquiredOn }, today = new Date()) {
   const cleanName = typeof name === "string" ? name.trim() : "";
   if (!cleanName) return { error: "Item name is required" };
   if (cleanName.length > 100) return { error: "Item name must be 100 characters or fewer" };
@@ -31,8 +48,19 @@ export function validateItem({ name, quantity, acquiredAmount, sellingPrice }) {
   if (!isMoney(selling))
     return { error: "Selling price must be a Philippine peso amount of 0 or more, with at most 2 decimals" };
 
+  if (!acquiredOn) return { error: "Date acquired is required" };
+  if (!parseISODate(acquiredOn)) return { error: "Date acquired must be a valid date" };
+  if (acquiredOn < "2000-01-01") return { error: "Date acquired must be in the year 2000 or later" };
+  if (acquiredOn > toISODate(today)) return { error: "Date acquired can't be in the future" };
+
   return {
-    row: { name: cleanName, quantity: qty, acquired_amount_usd: acquired, selling_price_php: selling },
+    row: {
+      name: cleanName,
+      quantity: qty,
+      acquired_amount_usd: acquired,
+      selling_price_php: selling,
+      acquired_on: acquiredOn,
+    },
   };
 }
 
@@ -54,6 +82,7 @@ export function normalizeItem(r) {
     inStock: Number(r.quantity) > 0,
     acquiredAmount: Number(r.acquired_amount_usd),
     sellingPrice: Number(r.selling_price_php),
+    acquiredOn: r.acquired_on, // YYYY-MM-DD
     createdAt: r.created_at,
   };
 }
@@ -131,4 +160,59 @@ export function friendlyError(err) {
   if (/items_quantity_check/.test(msg)) return "Quantity must be 0 or more.";
   if (/check constraint/.test(msg)) return "Amounts must be 0 or more.";
   return msg;
+}
+
+// ---------- weekly / monthly / yearly brackets ----------
+export const BRACKETS = ["none", "week", "month", "year"];
+
+const monthDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+const monthYear = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
+
+// The bracket a local date falls in. Weeks run Monday–Sunday.
+// `key` sorts chronologically as a string.
+export function bracketOf(date, mode) {
+  const y = date.getFullYear();
+  if (mode === "year") return { key: String(y), label: String(y) };
+  if (mode === "month") {
+    return { key: `${y}-${pad(date.getMonth() + 1)}`, label: monthYear.format(date) };
+  }
+  if (mode === "week") {
+    const start = new Date(y, date.getMonth(), date.getDate() - ((date.getDay() + 6) % 7));
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    const label =
+      start.getFullYear() === end.getFullYear()
+        ? `${monthDay.format(start)} – ${monthDay.format(end)}, ${end.getFullYear()}`
+        : `${monthDay.format(start)}, ${start.getFullYear()} – ${monthDay.format(end)}, ${end.getFullYear()}`;
+    return { key: toISODate(start), label: `Week of ${label}` };
+  }
+  throw new Error(`Unknown bracket: ${mode}`);
+}
+
+// Groups rows into brackets, newest bracket first. Row order within a bracket is preserved.
+export function groupByBracket(rows, getDate, mode) {
+  const groups = new Map();
+  for (const row of rows) {
+    const { key, label } = bracketOf(getDate(row), mode);
+    if (!groups.has(key)) groups.set(key, { key, label, rows: [] });
+    groups.get(key).rows.push(row);
+  }
+  return [...groups.values()].sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+}
+
+// Subtotals for a bracket of sales. Markup total = sum of (markup per unit x quantity)
+// over sales where it's known.
+export function salesSubtotal(sales, currentRate) {
+  let units = 0, total = 0, markupTotal = 0, markupKnown = 0;
+  for (const s of sales) {
+    units += s.quantity;
+    total += s.total;
+    const m = saleMarkup(s, currentRate);
+    if (m) { markupTotal += m.markup * s.quantity; markupKnown++; }
+  }
+  return {
+    count: sales.length,
+    units,
+    total: round2(total),
+    markupTotal: markupKnown ? round2(markupTotal) : null,
+  };
 }
